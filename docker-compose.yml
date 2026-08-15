@@ -1,0 +1,94 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: shortener
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  shortener-svc:
+    build: ./shortener-svc
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/shortener
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8001:8000"
+
+  redirect-svc:
+    build: ./redirect-svc
+    environment:
+      SHORTENER_SVC_URL: http://shortener-svc:8000
+      REDIS_HOST: redis
+    depends_on:
+      shortener-svc:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    ports:
+      - "8002:8000"
+
+  analytics-svc:
+    build: ./analytics-svc
+    environment:
+      REDIS_HOST: redis
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8003:8000"
+
+  notification-svc:
+    build: ./notification-svc
+    environment:
+      REDIS_HOST: redis
+      MILESTONE_EVERY: "3"
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8004:8000"
+
+  api-gateway:
+    build: ./api-gateway
+    environment:
+      SHORTENER_SVC_URL: http://shortener-svc:8000
+      REDIRECT_SVC_URL: http://redirect-svc:8000
+      ANALYTICS_SVC_URL: http://analytics-svc:8000
+      NOTIFICATION_SVC_URL: http://notification-svc:8000
+    depends_on:
+      shortener-svc:
+        condition: service_started
+      redirect-svc:
+        condition: service_started
+      analytics-svc:
+        condition: service_started
+      notification-svc:
+        condition: service_started
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:
