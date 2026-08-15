@@ -16,7 +16,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: api-gateway
-          image: shubh1840/api-gateway:latest
+          image: shubh1840/api-gateway:e509eb4
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000

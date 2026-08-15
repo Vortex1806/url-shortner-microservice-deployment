@@ -16,8 +16,8 @@ spec:
       enableServiceLinks: false
       containers:
         - name: notification-svc
-          image: shubh1840/notification-svc:latest
-          imagePullPolicy: Never
+          image: shubh1840/notification-svc:e509eb4
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
           envFrom:

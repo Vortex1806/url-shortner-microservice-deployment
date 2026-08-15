@@ -16,7 +16,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: redirect-svc
-          image: shubh1840/redirect-svc:latest
+          image: shubh1840/redirect-svc:e509eb4
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000

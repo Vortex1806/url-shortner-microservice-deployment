@@ -16,7 +16,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: analytics-svc
-          image: shubh1840/analytics-svc:latest
+          image: shubh1840/analytics-svc:e509eb4
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
