@@ -190,9 +190,36 @@ curl http://localhost/api/notifications
 | `Service` (x7, ClusterIP)                      | Stable DNS name + IP for each Deployment's pods                                                 | Pods are disposable and get new IPs on restart; Services are how everything finds everything else, replacing what a tool like Eureka would otherwise do |
 | `Ingress` (x2: app + ArgoCD)                   | Routes external HTTP traffic into the cluster                                                   | `api-gateway-ingress` routes `/` on `localhost` to `api-gateway`; `argocd-server-ingress` routes `argocd.localhost` to ArgoCD's own service             |
 
-**Deliberately not used:** no StatefulSet, no PersistentVolumeClaim — Postgres and Redis run as plain Deployments with no persistent storage. Data resets on pod restart. Fine for a demo/portfolio project; would need PVCs (or real managed RDS/ElastiCache once on AWS) for anything real.
+**Deliberately not used:** no StatefulSet — Postgres and Redis run as plain Deployments, each with a `PersistentVolumeClaim` (1Gi, `ReadWriteOnce`) mounted for data storage. This means data survives pod restarts (proven — see PVC section below), but since both are single-replica by design, a StatefulSet wasn't needed. On real EKS, these would move to managed RDS/ElastiCache instead of in-cluster PVCs, for proper backups and multi-AZ durability.
 
 **`enableServiceLinks: false`** is set on every Deployment's pod spec. Without it, Kubernetes auto-injects legacy `<SERVICE>_PORT` / `<SERVICE>_HOST` env vars into every pod in the namespace — this collided with the app's own `REDIS_PORT` env var and crashed a service on boot. Worth knowing: any app env var name that happens to match a Service name is at risk of this exact collision.
+
+### Persistent storage (Postgres + Redis)
+
+Both `postgres` and `redis` mount a `PersistentVolumeClaim` (1Gi, `ReadWriteOnce`, kind's default `standard` StorageClass) at their data directory, so data survives pod restarts — not just container restarts within the same pod, but full pod deletion/recreation.
+
+```
+k8s/base/postgres/pvc.yaml   # 1Gi PVC
+k8s/base/redis/pvc.yaml      # 1Gi PVC
+```
+
+`postgres`'s Deployment sets `PGDATA=/var/lib/postgresql/data/pgdata` — a subfolder inside the mount, not the mount root. This avoids Postgres refusing to initialize on some volume provisioners that leave a `lost+found` directory at the root.
+
+**Proof it works:**
+
+```bash
+curl -X POST http://localhost/api/shorten -H "Content-Type: application/json" -d '{"url": "https://google.com"}'
+# note the returned code
+
+kubectl delete pod -n url-shortener -l app=postgres
+kubectl get pods -n url-shortener -w
+# wait for postgres to reach 1/1 Running again
+
+curl -L http://localhost/<the-code>
+# resolves correctly — data survived the pod being deleted and recreated
+```
+
+**Limitation:** `ReadWriteOnce` means the volume can only be mounted by one pod at a time — acceptable since both are single-replica, but this is exactly why it doesn't scale past 1 replica for either, and why real production infra uses RDS/ElastiCache instead.
 
 ---
 
@@ -281,17 +308,27 @@ The workflow pushes back to `main` using the default `GITHUB_TOKEN`, which does 
 
 ---
 
-## 10. Known limitations (intentional, documented rather than fixed)
+## 10. Real bugs found and fixed during development
 
-- **No persistent volumes** on Postgres/Redis — data resets on every pod restart. Acceptable for a demo/portfolio project.
-- **`notification-svc`'s alert log** (the in-memory `notifications` list) would produce duplicate alerts if scaled to 2+ replicas, since each pod keeps its own copy. The click _count_ itself was fixed to read from Redis (shared, correct); the alert _log_ itself was left in-memory as a documented next step rather than adding leader-election complexity for a throwaway project.
-- **Redis Pub/Sub, not Streams** — messages aren't persisted; a subscriber that isn't connected at publish time misses that message permanently, with no error. Hit this directly during development: both `analytics-svc` and `notification-svc` crashed once on boot (Redis not ready yet at pod startup) and silently stopped consuming — fixed with a retry loop, but a system needing guaranteed delivery would use Redis Streams, RabbitMQ, or Kafka instead.
+Worth documenting these as-is — each is a genuine distributed-systems failure mode that Kubernetes' lack of startup-ordering guarantees exposes, not a typo or config mistake:
+
+- **`enableServiceLinks: false`** required on every Deployment. Without it, Kubernetes auto-injects legacy `<SERVICE>_PORT`/`<SERVICE>_HOST` env vars into every pod in the namespace — this collided with the app's own `REDIS_PORT` env var and crashed `redirect-svc` on boot.
+- **Redis Pub/Sub consumer crash on boot.** Both `analytics-svc` and `notification-svc` originally crashed once at startup if their pod came up before Redis was ready to accept connections — the background subscriber thread died with an unhandled exception, but the FastAPI server stayed healthy, so `/health` stayed green while the consumer was silently dead. Fixed with a `while True: try/except: sleep(3)` retry loop around the subscribe/listen call.
+- **`shortener-svc` stale DB connections after Postgres pod restart.** SQLAlchemy's default connection pool doesn't test a connection before reusing it — after Postgres restarted (e.g. from a pod delete or a rollout), `shortener-svc` kept trying to reuse dead pooled connections and failed with `server closed the connection unexpectedly`. Fixed with `pool_pre_ping=True` on the engine (tests + transparently replaces stale connections) plus an explicit retry wrapper around session creation (handles the case where Postgres isn't accepting connections at all yet, not just stale-but-open ones).
+- **`shortener-svc` schema not re-created after a fresh Postgres volume.** `Base.metadata.create_all()` only runs once, at app startup — it assumes the app and DB always come up together. Since Kubernetes gives no such guarantee (pods restart independently), a Postgres restart onto an empty/new volume left `shortener-svc` pointing at a DB with no `urls` table until the app itself was also restarted. Wrapped `create_all()` in a retry loop for the boot-ordering case; a production system would use explicit migrations (Alembic, Flyway) run as a deploy step instead of implicit schema creation on app boot.
+
+## 11. Known limitations (intentional, documented rather than fixed)
+
+- **`notification-svc`'s alert log** (the in-memory `notifications` list) would produce duplicate alerts if scaled to 2+ replicas, since each pod keeps its own copy. The click _count_ itself reads from Redis (shared, correct); the alert _log_ itself was left in-memory as a documented next step rather than adding leader-election complexity for a throwaway project.
+- **Redis Pub/Sub, not Streams** — messages still aren't persisted; a subscriber that isn't connected at publish time misses that message permanently, with no error surfaced anywhere. A system needing guaranteed delivery would use Redis Streams, RabbitMQ, or Kafka instead.
+- **`ReadWriteOnce` PVCs** limit Postgres/Redis to a single replica each — acceptable here, but the real reason production systems use RDS/ElastiCache instead of in-cluster PVCs.
 
 ---
 
-## 11. Not yet done / next steps
+## 12. Not yet done / next steps
 
 - [ ] Terraform: VPC + EKS cluster + node groups + IAM (IRSA for ArgoCD/CI) — next phase
 - [ ] Swap `ingress-nginx` → AWS Load Balancer Controller + real ALB (EKS-only, doesn't work on kind)
 - [ ] GitHub webhook → ArgoCD for instant sync instead of 3-minute polling (needs a public ArgoCD endpoint, only viable once on real EKS)
 - [ ] Move `notification-svc`'s alert log into Redis to fully remove the in-memory limitation
+- [ ] Explicit migration tool (Alembic) for `shortener-svc` instead of `create_all()` on boot
