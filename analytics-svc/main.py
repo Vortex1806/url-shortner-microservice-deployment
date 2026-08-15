@@ -1,6 +1,7 @@
 import os
 import json
 import threading
+import time
 
 import redis
 from fastapi import FastAPI
@@ -14,14 +15,20 @@ app = FastAPI(title="analytics-svc")
 
 
 def consume_clicks():
-    pubsub = r.pubsub()
-    pubsub.subscribe("clicks")
-    for message in pubsub.listen():
-        if message["type"] != "message":
-            continue
-        event = json.loads(message["data"])
-        code = event["code"]
-        r.hincrby("click_counts", code, 1)
+    while True:
+        try:
+            pubsub = r.pubsub()
+            pubsub.subscribe("clicks")
+            print("[analytics-svc] connected to redis, listening on 'clicks'")
+            for message in pubsub.listen():
+                if message["type"] != "message":
+                    continue
+                event = json.loads(message["data"])
+                code = event["code"]
+                r.hincrby("click_counts", code, 1)
+        except Exception as e:
+            print(f"[analytics-svc] redis connection lost/failed: {e}, retrying in 3s")
+            time.sleep(3)
 
 
 @app.on_event("startup")

@@ -60,10 +60,10 @@ curl -X POST http://localhost:8000/api/shorten -H "Content-Type: application/jso
 # -> {"code": "aB3xY9", "short_url": "/aB3xY9", ...}
 
 # hit it a few times
-curl -L http://localhost:8000/PKisO6
+curl -L http://localhost:8000/MIu7L1
 
 # check stats
-curl http://localhost:8000/api/stats/PKisO6
+curl http://localhost:8000/api/stats/MIu7L1
 
 # check notifications (fires every 3 clicks in this local config)
 curl http://localhost:8000/api/notifications
