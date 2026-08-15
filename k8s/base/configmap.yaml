@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: url-shortener-config
+  namespace: url-shortener
+data:
+  SHORTENER_SVC_URL: "http://shortener-svc:8000"
+  REDIRECT_SVC_URL: "http://redirect-svc:8000"
+  ANALYTICS_SVC_URL: "http://analytics-svc:8000"
+  NOTIFICATION_SVC_URL: "http://notification-svc:8000"
+  REDIS_HOST: "redis"
+  MILESTONE_EVERY: "3"
