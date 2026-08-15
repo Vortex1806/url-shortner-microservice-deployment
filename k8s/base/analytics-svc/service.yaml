@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-svc
+  namespace: url-shortener
+spec:
+  selector:
+    app: analytics-svc
+  ports:
+    - port: 8000
+      targetPort: 8000
