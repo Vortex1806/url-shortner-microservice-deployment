@@ -1,0 +1,59 @@
+name: Build and Deploy Changed Services
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed services
+        id: detect
+        run: |
+          CHANGED=$(git diff --name-only HEAD^ HEAD | cut -d/ -f1 | sort -u)
+          SERVICES="api-gateway shortener-svc redirect-svc analytics-svc notification-svc"
+          TO_BUILD=""
+          for svc in $SERVICES; do
+            if echo "$CHANGED" | grep -q "^${svc}$"; then
+              TO_BUILD="$TO_BUILD $svc"
+            fi
+          done
+          echo "services=$TO_BUILD" >> "$GITHUB_OUTPUT"
+          echo "Changed services:$TO_BUILD"
+
+      - name: Log in to DockerHub
+        if: steps.detect.outputs.services != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build, push, and patch manifests
+        if: steps.detect.outputs.services != ''
+        run: |
+          GIT_SHA=$(git rev-parse --short HEAD)
+          for svc in ${{ steps.detect.outputs.services }}; do
+            echo "Building $svc"
+            docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/${svc}:${GIT_SHA} ./${svc}
+            docker push ${{ secrets.DOCKERHUB_USERNAME }}/${svc}:${GIT_SHA}
+
+            sed -i "s|image: ${{ secrets.DOCKERHUB_USERNAME }}/${svc}:.*|image: ${{ secrets.DOCKERHUB_USERNAME }}/${svc}:${GIT_SHA}|" k8s/base/${svc}/deployment.yaml
+          done
+
+      - name: Commit updated manifests
+        if: steps.detect.outputs.services != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add k8s/base/
+          git diff --cached --quiet || git commit -m "ci: update image tag(s) for$([[ -n '${{ steps.detect.outputs.services }}' ]] && echo ' ${{ steps.detect.outputs.services }}')"
+          git push
