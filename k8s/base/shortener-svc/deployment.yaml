@@ -15,8 +15,8 @@ spec:
     spec:
       containers:
         - name: shortener-svc
-          image: shortener-svc:local
-          imagePullPolicy: Never
+          image: shubh1840/shortener-svc:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
           envFrom:
