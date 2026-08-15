@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: shortener-svc
-          image: shubh1840/shortener-svc:e509eb4
+          image: shubh1840/shortener-svc:d3866a4
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
